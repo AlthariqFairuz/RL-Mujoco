@@ -1,19 +1,20 @@
 """Train SAC on the low-cost-arm pick-and-lift task (see env.py).
 
     # train (GPU is used automatically if torch sees one)
-    uv run src/pick_lift/train.py --timesteps 2000000 --n-envs 16
+    uv run low_cost_robot_arm/pick_lift/train.py --timesteps 2000000 --n-envs 16
 
     # evaluate a saved model headless: success rate over N episodes
-    uv run src/pick_lift/train.py --eval src/pick_lift/runs/<name>/best_model.zip
+    uv run low_cost_robot_arm/pick_lift/train.py \
+        --eval low_cost_robot_arm/pick_lift/runs/<name>/best_model.zip
 
-Everything goes to src/pick_lift/runs/<name>/:
+Everything goes to low_cost_robot_arm/pick_lift/runs/<name>/:
     best_model.zip      best checkpoint by evaluation return (EvalCallback)
     final_model.zip     model at the end of training
     checkpoints/        periodic snapshots
     monitor/*.csv       per-episode return / length / is_success of the training envs
     evaluations.npz     evaluation history
     tb/                 TensorBoard logs (only if `tensorboard` is installed):
-                        tensorboard --logdir src/pick_lift/runs
+                        tensorboard --logdir low_cost_robot_arm/pick_lift/runs
                         watch rollout/success_rate and eval/mean_reward
 """
 import argparse

@@ -1,17 +1,18 @@
 """Train SAC, TD3 or PPO on the low-cost-arm reach task (see env.py).
 
     # train (GPU is used automatically if torch sees one)
-    uv run src/reach/train.py --timesteps 300000 --n-envs 8
-    uv run src/reach/train.py --algo ppo --timesteps 3000000 --name reach_ppo
-    uv run src/reach/train.py --reward sparse --her --name reach_sac_sparse_her
+    uv run low_cost_robot_arm/reach/train.py --timesteps 300000 --n-envs 8
+    uv run low_cost_robot_arm/reach/train.py --algo ppo --timesteps 3000000 --name reach_ppo
+    uv run low_cost_robot_arm/reach/train.py --reward sparse --her --name reach_sac_sparse_her
 
     # compare runs (learning curves vs env steps and vs wall-clock time)
-    uv run src/reach/compare.py reach_sac reach_td3 reach_ppo
+    uv run low_cost_robot_arm/reach/compare.py reach_sac reach_td3 reach_ppo
 
     # evaluate a saved model headless: success rate over N episodes
-    uv run src/reach/train.py --eval src/reach/runs/<name>/best_model.zip
+    uv run low_cost_robot_arm/reach/train.py \
+        --eval low_cost_robot_arm/reach/runs/<name>/best_model.zip
 
-Everything goes to src/reach/runs/<name>/:
+Everything goes to low_cost_robot_arm/reach/runs/<name>/:
     best_model.zip      best checkpoint by evaluation return (EvalCallback)
     final_model.zip     model at the end of training
     checkpoints/        periodic snapshots
@@ -19,7 +20,7 @@ Everything goes to src/reach/runs/<name>/:
     evaluations.npz     evaluation history
     config.json         command-line arguments (used by --eval and play.py to rebuild the env)
     tb/                 TensorBoard logs (only if `tensorboard` is installed):
-                        tensorboard --logdir src/reach/runs
+                        tensorboard --logdir low_cost_robot_arm/reach/runs
                         watch rollout/success_rate and eval/mean_reward
 """
 import argparse

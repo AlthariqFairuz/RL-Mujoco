@@ -15,10 +15,10 @@ Experience Replay (HER). In each experiment only one thing changes; everything e
 - **Episode:** 100 steps (5 s), no early termination.
 - **Success:** within 1 cm at the last step.
 - **Code:**
-  - `src/reach/env.py`: Gymnasium environment.
-  - `src/reach/train.py`: training with stable-baselines3; `--algo`, `--reward` and `--her` flags.
-  - `src/reach/compare.py`: comparison plots and tables.
-  - `src/play.py`: video rendering.
+  - `low_cost_robot_arm/reach/env.py`: Gymnasium environment.
+  - `low_cost_robot_arm/reach/train.py`: training with stable-baselines3; `--algo`, `--reward` and `--her` flags.
+  - `low_cost_robot_arm/reach/compare.py`: comparison plots and tables.
+  - `low_cost_robot_arm/play.py`: video rendering.
 
 Shared settings: 8 parallel simulators, network with 2 hidden layers of 256 units, γ = 0.95,
 seed 0, evaluation every 10k steps.
@@ -93,7 +93,7 @@ success, so the critic has nothing to learn from. The few successes the agent di
 targets that happened to be close to its start pose. After 300k steps it had learned those and
 nothing else; its curve was only beginning to rise at the end of the budget.
 
-Video, same three targets for both agents: `videos/reach_sparse_vs_her.mp4`.
+Video, same three targets for both agents: `low_cost_robot_arm/videos/reach_sparse_vs_her.mp4`.
 The sparse-only agent curls up without moving toward distant targets, while the HER agent
 reaches each one.
 
@@ -118,19 +118,19 @@ reaches each one.
 ```bash
 uv sync
 # experiment 1
-uv run src/reach/train.py --algo sac --name reach_sac
-uv run src/reach/train.py --algo td3 --name reach_td3
-uv run src/reach/train.py --algo ppo --timesteps 3000000 --eval-freq 25000 --eval-episodes 30 --name reach_ppo
-uv run src/reach/compare.py reach_sac reach_td3 reach_ppo
+uv run low_cost_robot_arm/reach/train.py --algo sac --name reach_sac
+uv run low_cost_robot_arm/reach/train.py --algo td3 --name reach_td3
+uv run low_cost_robot_arm/reach/train.py --algo ppo --timesteps 3000000 --eval-freq 25000 --eval-episodes 30 --name reach_ppo
+uv run low_cost_robot_arm/reach/compare.py reach_sac reach_td3 reach_ppo
 # experiment 2
-uv run src/reach/train.py --reward sparse --name reach_sac_sparse
-uv run src/reach/train.py --reward sparse --her --name reach_sac_sparse_her
-uv run src/reach/train.py --reward dense --her --name reach_sac_dense_her
-uv run src/reach/compare.py reach_sac reach_sac_sparse reach_sac_sparse_her reach_sac_dense_her \
-    --out videos/reach_reward_her.png
+uv run low_cost_robot_arm/reach/train.py --reward sparse --name reach_sac_sparse
+uv run low_cost_robot_arm/reach/train.py --reward sparse --her --name reach_sac_sparse_her
+uv run low_cost_robot_arm/reach/train.py --reward dense --her --name reach_sac_dense_her
+uv run low_cost_robot_arm/reach/compare.py reach_sac reach_sac_sparse reach_sac_sparse_her reach_sac_dense_her \
+    --out low_cost_robot_arm/videos/reach_reward_her.png
 # evaluate / render any run
-uv run src/reach/train.py --eval src/reach/runs/reach_sac_sparse_her/best_model.zip --eval-episodes 200
-uv run src/play.py reach src/reach/runs/reach_sac_sparse_her/best_model.zip --out videos/her.mp4
+uv run low_cost_robot_arm/reach/train.py --eval low_cost_robot_arm/reach/runs/reach_sac_sparse_her/best_model.zip --eval-episodes 200
+uv run low_cost_robot_arm/play.py reach low_cost_robot_arm/reach/runs/reach_sac_sparse_her/best_model.zip --out low_cost_robot_arm/videos/her.mp4
 ```
 
 **Limitations**

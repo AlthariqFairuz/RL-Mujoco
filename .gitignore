@@ -8,10 +8,11 @@ wheels/
 
 # Virtual environments
 .venv
+.ruff_cache/
 
 # External assets (see README: Setup)
 mujoco_menagerie/
 
 # Training outputs: models, checkpoints, monitor CSVs, TensorBoard, logs
-src/*/runs/
+**/runs/
 *.log

@@ -1,8 +1,11 @@
 """Render a trained policy to a video (works headless over SSH via EGL).
 
-    uv run src/play.py reach      src/reach/runs/reach_sac_v1/best_model.zip
-    uv run src/play.py pick_lift  src/pick_lift/runs/pick_lift_v2_fixed_reward/best_model.zip \
-        --episodes 5 --out videos/pick_lift.mp4
+    # from the repository root; video goes to low_cost_robot_arm/videos/<task>.mp4 by default
+    uv run low_cost_robot_arm/play.py reach \
+        low_cost_robot_arm/reach/runs/reach_sac/best_model.zip
+    uv run low_cost_robot_arm/play.py pick_lift \
+        low_cost_robot_arm/pick_lift/runs/pick_lift_v2_fixed_reward/best_model.zip \
+        --episodes 5 --out low_cost_robot_arm/videos/pick_lift.mp4
 
 Output format follows the extension: .mp4 (H.264, plays everywhere except VS Code's preview),
 .webm (VP9, plays inside VS Code), .gif (no ffmpeg needed, larger file).
@@ -21,7 +24,7 @@ os.environ.setdefault("MUJOCO_GL", "egl")  # offscreen GPU rendering, no display
 import numpy as np
 from stable_baselines3 import PPO, SAC, TD3
 
-SRC = Path(__file__).resolve().parent
+PROJECT = Path(__file__).resolve().parent
 TASKS = {"reach": "LowCostArmReachEnv", "pick_lift": "LowCostArmPickLiftEnv"}
 ALGOS = {"sac": SAC, "td3": TD3, "ppo": PPO}
 
@@ -35,7 +38,7 @@ def run_config(model_path: str) -> dict:
 
 
 def load_env_class(task: str):
-    path = SRC / task / "env.py"
+    path = PROJECT / task / "env.py"
     spec = importlib.util.spec_from_file_location(f"{task}_env", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -67,11 +70,11 @@ def main():
                    " run's config.json)")
     p.add_argument("--episodes", type=int, default=3)
     p.add_argument("--seed", type=int, default=123)
-    p.add_argument("--out", help="video path (default: videos/<task>.mp4)")
+    p.add_argument("--out", help="video path (default: low_cost_robot_arm/videos/<task>.mp4)")
     p.add_argument("--stochastic", action="store_true", help="sample actions instead of the mean")
     args = p.parse_args()
 
-    out = Path(args.out or f"videos/{args.task}.mp4")
+    out = Path(args.out) if args.out else PROJECT / "videos" / f"{args.task}.mp4"
     cfg = run_config(args.model)
     env_kwargs = dict(reward_type=cfg["reward"], goal_obs=cfg["her"]) if "reward" in cfg else {}
     env = load_env_class(args.task)(render_mode="rgb_array", **env_kwargs)

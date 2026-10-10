@@ -1,6 +1,8 @@
 """Compare reach runs: learning curves vs env steps and vs wall-clock time.
 
-    uv run src/reach/compare.py reach_sac reach_td3 reach_ppo [--out videos/reach_compare.png]
+    uv run low_cost_robot_arm/reach/compare.py reach_sac reach_td3 reach_ppo [--out PATH.png]
+
+The plot goes to low_cost_robot_arm/videos/reach_compare.png unless --out is given.
 
 Reads runs/<name>/evaluations.npz (deterministic evaluation, success per eval) and
 runs/<name>/monitor/*.csv (training episodes, with wall-clock timestamps).
@@ -16,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 RUNS_DIR = Path(__file__).resolve().parent / "runs"
+VIDEOS_DIR = Path(__file__).resolve().parents[1] / "videos"
 
 
 def load_monitor(run_dir: Path) -> pd.DataFrame:
@@ -34,8 +37,8 @@ def first_reach(x: np.ndarray, y: np.ndarray, level: float):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
-    p.add_argument("runs", nargs="+", help="run folder names under src/reach/runs/")
-    p.add_argument("--out", default="videos/reach_compare.png")
+    p.add_argument("runs", nargs="+", help="run folder names under low_cost_robot_arm/reach/runs/")
+    p.add_argument("--out", default=str(VIDEOS_DIR / "reach_compare.png"))
     args = p.parse_args()
 
     fig, axes = plt.subplots(1, 3, figsize=(17, 4.8))

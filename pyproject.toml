@@ -1,7 +1,7 @@
 [project]
 name = "rl"
 version = "0.1.0"
-description = "Reinforcement learning on a simulated low-cost robot arm (MuJoCo + Stable-Baselines3)"
+description = "A collection of reinforcement learning experiments in MuJoCo simulation"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -17,4 +17,4 @@ dependencies = [
 line-length = 100
 
 [tool.ruff.lint.isort]
-known-first-party = ["env"]  # src/<task>/env.py, imported by the scripts next to it
+known-first-party = ["env"]  # <project>/<task>/env.py, imported by the scripts next to it
