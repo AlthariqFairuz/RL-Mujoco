@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# External assets (see README: Setup)
+mujoco_menagerie/
+
+# Training outputs: models, checkpoints, monitor CSVs, TensorBoard, logs
+src/*/runs/
+*.log
