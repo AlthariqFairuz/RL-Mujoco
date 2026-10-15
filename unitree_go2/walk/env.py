@@ -27,6 +27,11 @@ Reward: a weighted sum of terms, each multiplied by the control period dt (legge
     - collision                                              thighs/calves must not hit the floor
 Episodes terminate when the robot falls (body tilted > ~60 deg or base too low) and are
 truncated after `max_episode_steps` (20 s).
+
+Domain randomization (`randomize=True`, legged_gym style; off by default): every episode draws a
+new foot friction, extra base payload and motor strength (PD gain); observations get uniform
+sensor noise; and the base is pushed (a random horizontal velocity kick) every few seconds.
+A policy trained this way must not rely on one exact robot or perfect sensors.
 """
 from pathlib import Path
 
@@ -42,8 +47,6 @@ JOINTS = [f"{leg}_{part}_joint" for leg in LEGS for part in ("hip", "thigh", "ca
 DEFAULT_POSE = np.array([0.0, 0.9, -1.8] * 4)  # Menagerie "home" keyframe
 ACTION_SCALE = 0.5  # rad of target offset at |action| = 1 (0.25 was too tight to step)
 KP, KD = 35.0, 0.5  # PD gains (Nm/rad, Nm s/rad); 20 lets the robot sag to 0.19 m
-
-
 
 def _build_model(sim_dt: float) -> mujoco.MjModel:
     """Menagerie scene with each torque motor turned into a torque-limited PD controller."""
@@ -76,6 +79,15 @@ REWARD_WEIGHTS = {
 }
 TRACKING_SIGMA = 0.25
 
+# domain randomization (randomize=True): defaults of the constructor arguments
+FRICTION_RANGE = (0.2, 1.25)  # foot sliding friction (nominal 0.8; feet have contact priority)
+PAYLOAD_RANGE = (-1.0, 3.0)  # kg added to the base (whole robot: 15.2 kg)
+KP_RANGE = (0.9, 1.1)  # motor strength: PD gain scale
+PUSH_SPEED = 1.5  # m/s, max horizontal velocity kick
+PUSH_INTERVAL = (4.0, 8.0)  # s between pushes
+# uniform observation noise (before the observation scales), as in legged_gym
+NOISE = {"lin_vel": 0.1, "ang_vel": 0.2, "gravity": 0.05, "joint_pos": 0.01, "joint_vel": 1.5}
+
 
 class Go2WalkEnv(gym.Env):
     metadata = {"render_modes": ["rgb_array"], "render_fps": 50}
@@ -91,6 +103,13 @@ class Go2WalkEnv(gym.Env):
         cmd_vy: tuple[float, float] = (-0.5, 0.5),
         cmd_wz: tuple[float, float] = (-1.0, 1.0),
         init_noise: float = 0.1,  # rad noise on the start pose
+        randomize: bool = False,  # domain randomization, pushes and sensor noise
+        friction_range: tuple[float, float] = FRICTION_RANGE,
+        payload_range: tuple[float, float] = PAYLOAD_RANGE,
+        kp_range: tuple[float, float] = KP_RANGE,
+        push_speed: float = PUSH_SPEED,
+        push_interval: tuple[float, float] = PUSH_INTERVAL,
+        obs_noise: float = 1.0,  # scale of NOISE
         width: int = 640,
         height: int = 480,
     ):
@@ -101,6 +120,11 @@ class Go2WalkEnv(gym.Env):
         self.cmd_low = np.array([cmd_vx[0], cmd_vy[0], cmd_wz[0]])
         self.cmd_high = np.array([cmd_vx[1], cmd_vy[1], cmd_wz[1]])
         self.init_noise = init_noise
+        self.randomize = randomize
+        self.friction_range, self.payload_range, self.kp_range = (
+            friction_range, payload_range, kp_range)
+        self.push_speed, self.push_interval = push_speed, push_interval
+        self.obs_noise = obs_noise if randomize else 0.0
 
         self.model = _build_model(sim_dt)
         self.data = mujoco.MjData(self.model)
@@ -119,6 +143,11 @@ class Go2WalkEnv(gym.Env):
             g for g in range(m.ngeom)
             if m.geom_bodyid[g] in leg_bodies and g not in self._feet and m.geom_contype[g]
         ])
+
+        # nominal values that the randomization scales / offsets
+        self._foot_friction0 = m.geom_friction[self._feet, 0].copy()
+        self._base_mass0 = m.body_mass[self._base]
+        self._kp0 = m.actuator_gainprm[:, 0].copy()
 
         self.action_space = spaces.Box(-1.0, 1.0, shape=(12,), dtype=np.float32)
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(48,), dtype=np.float32)
@@ -154,20 +183,40 @@ class Go2WalkEnv(gym.Env):
             cmd[:] = 0.0
         return cmd
 
+    def _noise(self, name: str, n: int) -> np.ndarray:
+        if self.obs_noise == 0.0:
+            return np.zeros(n)
+        scale = self.obs_noise * NOISE[name]
+        return self.np_random.uniform(-scale, scale, n)
+
     def _get_obs(self) -> np.ndarray:
         return np.concatenate([
-            self._base_lin_vel() * OBS_LIN_VEL,
-            self._base_ang_vel() * OBS_ANG_VEL,
-            self._projected_gravity(),
+            (self._base_lin_vel() + self._noise("lin_vel", 3)) * OBS_LIN_VEL,
+            (self._base_ang_vel() + self._noise("ang_vel", 3)) * OBS_ANG_VEL,
+            self._projected_gravity() + self._noise("gravity", 3),
             self.command * np.array([OBS_LIN_VEL, OBS_LIN_VEL, OBS_ANG_VEL]),
-            self.data.qpos[self._qadr] - DEFAULT_POSE,
-            self.data.qvel[self._dadr] * OBS_JOINT_VEL,
+            self.data.qpos[self._qadr] - DEFAULT_POSE + self._noise("joint_pos", 12),
+            (self.data.qvel[self._dadr] + self._noise("joint_vel", 12)) * OBS_JOINT_VEL,
             self.last_action,
         ]).astype(np.float32)
+
+    def _randomize_dynamics(self):
+        """New foot friction, base payload and motor strength for this episode."""
+        rng, m = self.np_random, self.model
+        m.geom_friction[self._feet, 0] = rng.uniform(*self.friction_range)
+        m.body_mass[self._base] = self._base_mass0 + rng.uniform(*self.payload_range)
+        kp = self._kp0 * rng.uniform(*self.kp_range, size=12)
+        m.actuator_gainprm[:, 0] = kp  # position actuator: force = kp (ctrl - q) - kv qdot
+        m.actuator_biasprm[:, 1] = -kp
+
+    def _next_push(self) -> int:
+        return self.steps + int(self.np_random.uniform(*self.push_interval) / self.dt)
 
     # ---------------------------------------------------------------- gym API
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
+        if self.randomize:
+            self._randomize_dynamics()
         mujoco.mj_resetDataKeyframe(self.model, self.data, self.model.key("home").id)
         self.data.qpos[self._qadr] = DEFAULT_POSE + self.np_random.uniform(
             -self.init_noise, self.init_noise, 12)
@@ -182,6 +231,7 @@ class Go2WalkEnv(gym.Env):
         self.feet_air_time = np.zeros(4)
         self.last_contact = np.ones(4, dtype=bool)
         self.steps = 0
+        self.push_at = self._next_push() if self.randomize and self.push_speed > 0 else -1
         self.episode_sums = {k: 0.0 for k in REWARD_WEIGHTS}
         return self._get_obs(), {}
 
@@ -190,6 +240,11 @@ class Go2WalkEnv(gym.Env):
         self.data.ctrl[:] = DEFAULT_POSE + ACTION_SCALE * action
         mujoco.mj_step(self.model, self.data, nstep=self.decimation)
         self.steps += 1
+        if self.steps == self.push_at:  # kick the base sideways/forwards (world frame)
+            angle = self.np_random.uniform(-np.pi, np.pi)
+            speed = self.np_random.uniform(0.0, self.push_speed)
+            self.data.qvel[0:2] += speed * np.array([np.cos(angle), np.sin(angle)])
+            self.push_at = self._next_push()
 
         lin_vel, ang_vel = self._base_lin_vel(), self._base_ang_vel()
         gravity = self._projected_gravity()

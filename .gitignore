@@ -16,3 +16,4 @@ mujoco_menagerie/
 # Training outputs: models, checkpoints, monitor CSVs, TensorBoard, logs
 **/runs/
 *.log
+low_cost_robot_arm/diffusion/data/

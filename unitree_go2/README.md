@@ -14,6 +14,13 @@ alone: 16 parallel simulators, 30M steps, 3.2 h.
   - Tracking error **0.06 m/s**, **0%** falls over 20 evaluation episodes of 20 s.
   - Learns a trot (diagonal legs move together) without a gait being specified, only from a
     reward for following the command and taking real steps.
+- **Robustness:** a follow-up policy trained with domain randomization survives what knocks the
+  original over.
+  - Varied foot friction, payload and motor strength, sensor noise, random pushes.
+  - Falls under 1 m/s pushes: **62% → 10%**. Under 1.5 m/s pushes: 98% → 62%.
+  - Tracking accuracy is unchanged.
+  - It only worked as a curriculum: trained from scratch with all the disturbances on, the
+    robot only learned to stand.
 - **Debugging a failed run:** the first run trained for 30M steps and only learned to stand
   still. Its policy noise (std) grew from 1 to 15 because of an entropy bonus on clipped
   actions. Removing the bonus fixed it (see [lessons learned](#lessons-learned)).
@@ -44,6 +51,48 @@ vx, vy in m/s (robot frame), wz in rad/s.
 v2 walked forward and turned by 10M steps; sideways, backward and turning on the spot followed
 by ~15M. Returns are per 20 s episode, evaluated on 20 episodes with random commands.
 
+## Robustness
+
+`walk/env.py` with `randomize=True`, following legged_gym. Every episode draws:
+
+- **Foot friction:** 0.2–1.25 (nominal 0.8).
+- **Payload on the base:** −1 to +3 kg (the robot is 15.2 kg).
+- **Motor strength:** ±10% PD gain per joint.
+
+During the episode:
+
+- **Sensor noise:** uniform noise on every observation.
+- **Pushes:** a random horizontal velocity kick of up to 1.5 m/s every 4–8 s.
+
+| Run | Started from | Randomization | Steps | Result |
+|---|---|---|---|---|
+| v3 from scratch | random weights | friction 0.4–1.2, pushes ≤ 1 m/s | 30M | stands still (velocity error 0.5 m/s) |
+| v3 | v2 | same | 15M | walks; fewer falls under 1 m/s pushes |
+| **v4** | v3 | friction 0.2–1.25, pushes ≤ 1.5 m/s | 15M | best (below) |
+
+`walk/robustness.py` changes one thing at a time from the nominal robot. Each cell is 40 episodes
+of 20 s with random commands; pushes come every 3 s in a random direction. Cells give the fall
+rate (velocity error in m/s):
+
+| Condition | v2 | v3 | **v4** |
+|---|---|---|---|
+| Nominal | 5% (0.08) | 0% (0.07) | 2% (0.08) |
+| Push 0.5 m/s | 0% | 8% | 0% |
+| Push 1.0 m/s | 62% | 35% | **10%** |
+| Push 1.5 m/s | 98% | 82% | **62%** |
+| Push 2.0 m/s | 100% | 100% | 85% |
+| Payload +6 kg | 10% | 2% | 5% |
+| Payload +9 kg (outside training range) | 20% | 20% | **8%** |
+| Foot friction 0.2 | 10% | 12% | **2%** |
+| Sensor noise ×2 | 8% | 5% | **0%** |
+
+<p align="center"><img src="videos/robustness.png" width="100%"></p>
+
+The same command tour with a 1.5 m/s push every 3 s (left, forward, right, back). v2 falls after
+10 s; v4 finishes the tour:
+
+<p align="center"><img src="videos/push_v2_vs_v4.gif" width="80%"></p>
+
 ## Task
 
 `walk/env.py`: every episode samples a command (vx ∈ [-0.5, 1.0] m/s, vy ∈ [-0.5, 0.5] m/s,
@@ -68,7 +117,8 @@ clip 0.2, no entropy bonus, actor and critic MLPs [512, 256, 128] with ELU.
 unitree_go2/
   walk/
     env.py         velocity-tracking environment
-    train.py       train/evaluate (PPO)
+    train.py       train/evaluate (PPO; --randomize, --init to continue from a model)
+    robustness.py  stress test: pushes, payload, foot friction, sensor noise (table + plot)
     runs/          trained models, logs, TensorBoard (git-ignored)
   play.py          render a model through a fixed command tour to .mp4 / .webm / .gif (headless)
   videos/          rendered videos and plots
@@ -98,6 +148,18 @@ uv run unitree_go2/walk/train.py --eval-episodes 20 \
 # render the command tour (default: unitree_go2/videos/walk.mp4)
 uv run unitree_go2/play.py unitree_go2/walk/runs/walk_ppo/best_model.zip
 
+# robustness curriculum: continue the walker with domain randomization (15M steps, ~1.6 h each)
+uv run unitree_go2/walk/train.py --randomize --timesteps 15000000 --name walk_ppo_robust \
+    --init unitree_go2/walk/runs/walk_ppo/best_model.zip
+
+# stress test and compare models (default plot: unitree_go2/videos/robustness.png)
+uv run unitree_go2/walk/robustness.py --episodes 40 \
+    v2=unitree_go2/walk/runs/walk_ppo/best_model.zip \
+    robust=unitree_go2/walk/runs/walk_ppo_robust/best_model.zip
+
+# command tour with a 1.5 m/s push every 3 s
+uv run unitree_go2/play.py unitree_go2/walk/runs/walk_ppo_robust/best_model.zip --push 1.5
+
 # live training curves
 uv run tensorboard --logdir unitree_go2/walk/runs
 ```
@@ -118,6 +180,14 @@ uv run tensorboard --logdir unitree_go2/walk/runs
     standing pose. The MJX model's single solver iteration made the CPU simulation blow up.
   - On this 8-core CPU, a small MLP policy trained faster on the CPU than on the GPU: every env
     step needs a policy forward pass, and GPU transfers cost more than the math.
+- **Disturbances need a curriculum.**
+  - With pushes, payload and sensor noise from step 0, the robot never learned to walk: standing
+    still was the safest behaviour.
+  - Starting from the nominal walker and switching the randomization on kept the gait and added
+    robustness.
+  - v4 was trained on pushes up to 1.5 m/s and friction down to 0.2, where v3 had been weak. It
+    fixed exactly those cases.
+  - Even a +9 kg payload, outside the training range, became 3× safer.
 - **Why PPO here.** Locomotion needs tens of millions of steps. PPO does 20 large-batch updates
   per 16k transitions, while SAC (as configured for the [robot arm](../low_cost_robot_arm/))
   does one update per transition, about 30M updates for this run. With cheap simulation, PPO

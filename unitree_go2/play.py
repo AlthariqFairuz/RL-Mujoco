@@ -6,6 +6,8 @@ backward, stand) instead of random ones, and the tracking error of each segment 
     # from the repository root; video goes to unitree_go2/videos/walk.mp4 by default
     uv run unitree_go2/play.py unitree_go2/walk/runs/walk_ppo/best_model.zip
     uv run unitree_go2/play.py <model.zip> --out unitree_go2/videos/walk.gif
+    # same tour, with a sideways/forward kick of 1.2 m/s every 3 s
+    uv run unitree_go2/play.py <model.zip> --push 1.2 --out unitree_go2/videos/push.mp4
 
 Output format follows the extension: .mp4 (H.264), .webm (VP9, plays inside VS Code),
 .gif (no ffmpeg needed, larger file).
@@ -67,6 +69,8 @@ def main():
     p.add_argument("model", help="path to a saved .zip")
     p.add_argument("--seed", type=int, default=123)
     p.add_argument("--out", help="video path (default: unitree_go2/videos/walk.mp4)")
+    p.add_argument("--push", type=float, default=0.0,
+                   help="push the base with this horizontal speed (m/s) every 3 s")
     p.add_argument("--width", type=int, default=640)
     p.add_argument("--height", type=int, default=480)
     args = p.parse_args()
@@ -77,6 +81,7 @@ def main():
                            max_episode_steps=10**9, resample_every=10**9)
     model = PPO.load(args.model, device="cpu")
     fps = env.metadata["render_fps"]
+    push_steps, push_dirs = int(round(3.0 / env.dt)), [(0, 1), (1, 0), (0, -1), (-1, 0)]
 
     obs, _ = env.reset(seed=args.seed)
     frames = [env.render()]
@@ -88,6 +93,9 @@ def main():
             obs = env._get_obs()  # observation with the new command
             action, _ = model.predict(obs, deterministic=True)
             obs, r, terminated, truncated, info = env.step(action)
+            if args.push and env.steps % push_steps == 0:  # cycle left, forward, right, back
+                direction = push_dirs[(env.steps // push_steps) % 4]
+                env.data.qvel[0:2] += args.push * np.array(direction, dtype=float)
             frames.append(env.render())
             measured.append([*info["lin_vel"], info["ang_vel_z"]])
             if terminated:

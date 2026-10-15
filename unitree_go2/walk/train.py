@@ -2,6 +2,9 @@
 
     # train (16 parallel simulators on the CPU; the policy is small, so the CPU also trains it)
     uv run unitree_go2/walk/train.py --timesteps 30000000 --name walk_ppo
+    # with domain randomization, pushes and sensor noise (see env.py)
+    uv run unitree_go2/walk/train.py --randomize --name walk_ppo_robust \
+        --init unitree_go2/walk/runs/walk_ppo/best_model.zip --timesteps 15000000
 
     # evaluate a saved model headless: fall rate and velocity-tracking error
     uv run unitree_go2/walk/train.py --eval unitree_go2/walk/runs/<name>/best_model.zip
@@ -45,12 +48,16 @@ def parse_args():
     p.add_argument("--torch-threads", type=int, default=4,
                    help="leave the other cores to the simulators")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--randomize", action="store_true",
+                   help="domain randomization, pushes and sensor noise (train and eval)")
     p.add_argument("--n-steps", type=int, default=1024, help="steps per env per rollout")
     p.add_argument("--batch-size", type=int, default=4096, help="minibatch size")
     p.add_argument("--n-epochs", type=int, default=5, help="passes over each rollout")
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--eval-freq", type=int, default=500_000, help="env steps between evaluations")
     p.add_argument("--eval-episodes", type=int, default=10)
+    p.add_argument("--init", metavar="MODEL.zip",
+                   help="continue training this model (e.g. a nominal walker before --randomize)")
     p.add_argument("--eval", metavar="MODEL.zip", help="only evaluate this saved model and exit")
     return p.parse_args()
 
@@ -80,8 +87,8 @@ class WalkMetricsCallback(BaseCallback):
         return True
 
 
-def evaluate(model_path: str, episodes: int, device: str, seed: int):
-    env = Go2WalkEnv()
+def evaluate(model_path: str, episodes: int, device: str, seed: int, randomize: bool):
+    env = Go2WalkEnv(randomize=randomize)
     model = PPO.load(model_path, device=device)
     falls, returns, errors, lengths = [], [], [], []
     for ep in range(episodes):
@@ -109,7 +116,7 @@ def main():
     device = resolve_device(args.device)
 
     if args.eval:
-        evaluate(args.eval, args.eval_episodes, device, args.seed + 10_000)
+        evaluate(args.eval, args.eval_episodes, device, args.seed + 10_000, args.randomize)
         return
 
     run_dir = RUNS_DIR / (args.name or time.strftime("ppo_%Y%m%d_%H%M%S"))
@@ -118,40 +125,46 @@ def main():
     (run_dir / "config.json").write_text(json.dumps(vars(args), indent=2))
 
     vec_cls = SubprocVecEnv if args.n_envs > 1 else DummyVecEnv
+    env_kwargs = {"randomize": args.randomize}
     train_env = make_vec_env(
         Go2WalkEnv,
         n_envs=args.n_envs,
         seed=args.seed,
         vec_env_cls=vec_cls,
         monitor_dir=str(run_dir / "monitor"),
+        env_kwargs=env_kwargs,
     )
-    eval_env = make_vec_env(Go2WalkEnv, n_envs=1, seed=args.seed + 1_000)
+    eval_env = make_vec_env(Go2WalkEnv, n_envs=1, seed=args.seed + 1_000, env_kwargs=env_kwargs)
 
     use_tb = importlib.util.find_spec("tensorboard") is not None
-    model = PPO(
-        "MlpPolicy",
-        train_env,
-        learning_rate=args.lr,
-        n_steps=args.n_steps,
-        batch_size=args.batch_size,
-        n_epochs=args.n_epochs,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        # no entropy bonus: actions are clipped to [-1, 1], so a wider Gaussian costs nothing
-        # and the bonus alone grew the policy std from 1 to 15 (pure noise) in the first run
-        ent_coef=0.0,
-        max_grad_norm=1.0,
-        policy_kwargs=dict(
-            net_arch=dict(pi=[512, 256, 128], vf=[512, 256, 128]),
-            activation_fn=torch.nn.ELU,
-            log_std_init=-0.5,  # initial std 0.6
-        ),
-        tensorboard_log=str(run_dir / "tb") if use_tb else None,
-        seed=args.seed,
-        device=device,
-        verbose=1,
-    )
+    tb_log = str(run_dir / "tb") if use_tb else None
+    if args.init:  # same hyperparameters as the saved model; only the environment changes
+        model = PPO.load(args.init, env=train_env, device=device, tensorboard_log=tb_log)
+    else:
+        model = PPO(
+            "MlpPolicy",
+            train_env,
+            learning_rate=args.lr,
+            n_steps=args.n_steps,
+            batch_size=args.batch_size,
+            n_epochs=args.n_epochs,
+            gamma=0.99,
+            gae_lambda=0.95,
+            clip_range=0.2,
+            # no entropy bonus: actions are clipped to [-1, 1], so a wider Gaussian costs
+            # nothing and the bonus alone grew the policy std from 1 to 15 in the first run
+            ent_coef=0.0,
+            max_grad_norm=1.0,
+            policy_kwargs=dict(
+                net_arch=dict(pi=[512, 256, 128], vf=[512, 256, 128]),
+                activation_fn=torch.nn.ELU,
+                log_std_init=-0.5,  # initial std 0.6
+            ),
+            tensorboard_log=tb_log,
+            seed=args.seed,
+            device=device,
+            verbose=1,
+        )
 
     # callbacks count vec-env steps, so divide env-step intervals by n_envs
     per_call = max(args.n_envs, 1)
