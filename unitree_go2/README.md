@@ -5,7 +5,8 @@ Reinforcement learning for locomotion on a simulated Unitree Go2 quadruped (12 j
 environment trains a velocity-tracking walking policy with PPO (Stable-Baselines3), on the CPU
 alone: 16 parallel simulators, 30M steps, 3.2 h.
 
-<p align="center"><img src="videos/walk.gif" width="60%"></p>
+<p align="center"><img src="videos/walk.gif" width="60%"><br>
+<sub>Command tour: forward, forward + turn, sideways, backward, turn on the spot, stand.</sub></p>
 
 ## Highlights
 

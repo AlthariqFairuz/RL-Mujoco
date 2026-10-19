@@ -6,9 +6,8 @@ two tasks built from scratch as Gymnasium environments, trained with Stable-Base
 controlled experiments on RL algorithms and reward design, and imitation learning with a
 Diffusion Policy trained on the RL expert's demonstrations.
 
-| Pick-and-lift (SAC, 96% success) | Reach with a sparse reward: without vs with HER |
-|---|---|
-| ![pick and lift](videos/pick_lift.gif) | ![sparse vs HER](videos/reach_sparse_vs_her.gif) |
+<p align="center"><img src="videos/pick_lift.gif" width="60%"><br>
+<sub>Pick-and-lift with SAC, 96% success.</sub></p>
 
 ## Highlights
 
@@ -30,8 +29,6 @@ Diffusion Policy trained on the RL expert's demonstrations.
 
 Full write-up with plots: **[reports/reach_experiments.md](reports/reach_experiments.md)**
 
-<p align="center"><img src="videos/reach_reward_her.png" width="100%"></p>
-
 ## Results
 
 ### Reach: algorithms (shaped reward)
@@ -50,6 +47,18 @@ Full write-up with plots: **[reports/reach_experiments.md](reports/reach_experim
 | Sparse | never | 12% |
 | Sparse + HER | **40k** | 96% |
 | Shaped + HER | **40k** | 97% |
+
+<p align="center"><img src="videos/reach_reward_her.png" width="100%"></p>
+
+<p align="center"><img src="videos/reach_sparse_vs_her.gif" width="80%"><br>
+<sub>Sparse reward without HER (left) and with HER (right), same targets.</sub></p>
+
+### Pick-and-lift (SAC, 2M steps, ~16 h)
+
+| | Success (200 episodes) | Mean return |
+|---|---|---|
+| Best model | **96%** | 1798 ± 269 |
+| Final model | 94% | 1765 ± 361 |
 
 ### Pick-and-lift: Diffusion Policy from SAC demonstrations
 
@@ -93,13 +102,6 @@ Where the failures come from (100 episodes each):
 
 <p align="center"><img src="videos/pick_lift_diffusion.gif" width="60%"><br>
 <sub>Diffusion Policy, 4 episodes: the second one drops the cube during the lift.</sub></p>
-
-### Pick-and-lift (SAC, 2M steps, ~16 h)
-
-| | Success (200 episodes) | Mean return |
-|---|---|---|
-| Best model | **96%** | 1798 ± 269 |
-| Final model | 94% | 1765 ± 361 |
 
 ## Tasks
 
