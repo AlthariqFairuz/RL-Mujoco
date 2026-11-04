@@ -29,7 +29,7 @@ All projects share one Python environment.
 | Project | Robot | Highlights |
 |---|---|---|
 | [**Low-cost robot arm**](low_cost_robot_arm/) | Koch v1.1, 5-DoF + gripper | reach and pick-and-lift, **96%** success; SAC vs TD3 vs PPO; sparse reward + HER (12% → 96%); Diffusion Policy imitating SAC (78%) |
-| [**SO-101**](so101/) | SO-101 (LeRobot), 5-DoF + gripper | pick-and-lift recipe ported from the Koch arm unchanged: **92%** success |
+| [**SO-101**](so101/) | SO-101 (LeRobot), 5-DoF + gripper | pick-and-lift recipe ported from the Koch arm unchanged: **92%** success; distilled with DAgger into a camera-only policy: **93%** |
 | [**Unitree Go2**](unitree_go2/) | quadruped, 12 joints | walks at commanded speed and turn rate: 0.06 m/s error, 0% falls; domain randomization cuts falls under 1 m/s pushes from 62% to 10% |
 
 All results are in simulation; no policy has been run on a real robot yet.

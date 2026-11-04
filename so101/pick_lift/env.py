@@ -47,8 +47,8 @@ ACTION_SCALE = np.array([0.10, 0.10, 0.10, 0.15, 0.20, 0.25])
 W_REACH, W_CLOSE, W_GRASP, W_LIFT, W_SUCCESS, W_ACTION = 1.0, 0.5, 1.0, 5.0, 2.5, 0.005
 
 
-def _build_model(cube_half: float, cube_mass: float) -> mujoco.MjModel:
-    """Menagerie scene + a free-floating cube."""
+def _build_model(cube_half: float, cube_mass: float, spec_edit=None) -> mujoco.MjModel:
+    """Menagerie scene + a free-floating cube; `spec_edit(spec)` may change the scene further."""
     spec = mujoco.MjSpec.from_file(str(SCENE_XML))
     cube = spec.worldbody.add_body(name="cube", pos=[0.25, 0.0, cube_half])
     cube.add_freejoint(name="cube_joint")
@@ -61,6 +61,8 @@ def _build_model(cube_half: float, cube_mass: float) -> mujoco.MjModel:
         condim=4,
         rgba=[0.9, 0.15, 0.1, 1.0],
     )
+    if spec_edit is not None:
+        spec_edit(spec)
     return spec.compile()
 
 
@@ -80,6 +82,7 @@ class SO101PickLiftEnv(gym.Env):
         spawn_angle: float = 0.6,  # +/- rad around the arm's forward (+x) direction
         yaw_range: float = 0.5,  # +/- rad random cube yaw
         init_noise: float = 0.05,  # rad noise on the arm's start pose
+        spec_edit=None,  # callable(MjSpec) applied before compiling (see so101/vision)
     ):
         super().__init__()
         self.render_mode = render_mode
@@ -93,7 +96,7 @@ class SO101PickLiftEnv(gym.Env):
         self.yaw_range = yaw_range
         self.init_noise = init_noise
 
-        self.model = _build_model(cube_half, cube_mass)
+        self.model = _build_model(cube_half, cube_mass, spec_edit)
         self.data = mujoco.MjData(self.model)
 
         jnt = [self.model.joint(n) for n in ARM_JOINTS]
