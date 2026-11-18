@@ -2,6 +2,8 @@
 
     # train (GPU is used automatically if torch sees one)
     uv run so101/pick_lift/train.py --timesteps 2000000 --n-envs 16
+    # the same, but the cube is moved mid-episode in half of the training episodes
+    uv run so101/pick_lift/train.py --timesteps 800000 --n-envs 16 --perturb-prob 0.5
 
     # evaluate a saved model headless: success rate over N episodes
     uv run so101/pick_lift/train.py \
@@ -46,6 +48,10 @@ def parse_args():
     p.add_argument("--learning-starts", type=int, default=10_000)
     p.add_argument("--eval-freq", type=int, default=25_000, help="env steps between evaluations")
     p.add_argument("--eval-episodes", type=int, default=20)
+    p.add_argument("--perturb-prob", type=float, default=0.0,
+                   help="fraction of training episodes in which the cube is moved once (env.py)")
+    p.add_argument("--init", metavar="MODEL.zip",
+                   help="fine-tune this saved model instead of starting from scratch")
     p.add_argument("--eval", metavar="MODEL.zip", help="only evaluate this saved model and exit")
     return p.parse_args()
 
@@ -98,6 +104,7 @@ def main():
         SO101PickLiftEnv,
         n_envs=args.n_envs,
         seed=args.seed,
+        env_kwargs=dict(perturb_prob=args.perturb_prob),
         vec_env_cls=vec_cls,
         monitor_dir=str(run_dir / "monitor"),
         monitor_kwargs=dict(info_keywords=("is_success",)),
@@ -109,9 +116,7 @@ def main():
         print("tensorboard not installed -> no learning curves (`uv add tensorboard`);"
               " per-episode results are still written to monitor/*.csv")
 
-    model = SAC(
-        "MlpPolicy",
-        train_env,
+    sac_kwargs = dict(
         learning_rate=3e-4,
         buffer_size=1_000_000,
         learning_starts=args.learning_starts,
@@ -120,13 +125,22 @@ def main():
         tau=0.005,
         train_freq=1,  # one update round per vec-env step (= n_envs transitions)
         gradient_steps=max(1, round(args.utd * args.n_envs)),
-        ent_coef="auto",
-        policy_kwargs=dict(net_arch=[256, 256, 256]),
         tensorboard_log=str(run_dir / "tb") if use_tb else None,
         seed=args.seed,
         device=device,
         verbose=1,
     )
+    if args.init:
+        # networks and entropy coefficient from the saved model, new (empty) replay buffer
+        model = SAC.load(args.init, env=train_env, **sac_kwargs)
+    else:
+        model = SAC(
+            "MlpPolicy",
+            train_env,
+            ent_coef="auto",
+            policy_kwargs=dict(net_arch=[256, 256, 256]),
+            **sac_kwargs,
+        )
 
     # callbacks count vec-env steps, so divide env-step intervals by n_envs
     per_call = max(args.n_envs, 1)

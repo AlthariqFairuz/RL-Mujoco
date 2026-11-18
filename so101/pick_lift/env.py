@@ -20,6 +20,10 @@ Reward (dense, staged): reach + close-near-cube + both-jaws-on-cube + lift-while
 a per-step bonus while the cube is held lifted, and a small action penalty. See `_reward`.
 Episodes run their full length; `is_success` is whether the cube has been held lifted for
 `hold_steps` at the current step.
+
+Perturbations (off by default): with `perturb_prob` > 0, in that fraction of the episodes the cube
+is teleported `PERTURB_DIST` in a random direction at a random step, out of the gripper if it was
+held, so the policy has to learn to grasp again.
 """
 from pathlib import Path
 
@@ -45,6 +49,9 @@ ACTION_SCALE = np.array([0.10, 0.10, 0.10, 0.15, 0.20, 0.25])
 
 # reward weights (W_SUCCESS is paid on every step the cube is held lifted)
 W_REACH, W_CLOSE, W_GRASP, W_LIFT, W_SUCCESS, W_ACTION = 1.0, 0.5, 1.0, 5.0, 2.5, 0.005
+
+PERTURB_DIST = 0.04  # metres the cube is moved by a perturbation
+PERTURB_STEPS = (20, 120)  # training perturbations happen at a random step in this range
 
 
 def _build_model(cube_half: float, cube_mass: float, spec_edit=None) -> mujoco.MjModel:
@@ -82,6 +89,7 @@ class SO101PickLiftEnv(gym.Env):
         spawn_angle: float = 0.6,  # +/- rad around the arm's forward (+x) direction
         yaw_range: float = 0.5,  # +/- rad random cube yaw
         init_noise: float = 0.05,  # rad noise on the arm's start pose
+        perturb_prob: float = 0.0,  # fraction of episodes in which the cube is moved once
         spec_edit=None,  # callable(MjSpec) applied before compiling (see so101/vision)
     ):
         super().__init__()
@@ -95,6 +103,8 @@ class SO101PickLiftEnv(gym.Env):
         self.spawn_angle = spawn_angle
         self.yaw_range = yaw_range
         self.init_noise = init_noise
+        self.perturb_prob = perturb_prob
+        self._perturb_at = -1  # step of this episode's perturbation, -1 = none
 
         self.model = _build_model(cube_half, cube_mass, spec_edit)
         self.data = mujoco.MjData(self.model)
@@ -189,6 +199,16 @@ class SO101PickLiftEnv(gym.Env):
             reward += W_SUCCESS
         return reward, success, dict(dist=dist, lift=lift, grasped=grasped)
 
+    def move_cube(self, angle: float, dist: float = PERTURB_DIST) -> None:
+        """Teleport the cube `dist` in direction `angle` (world xy), back onto the table, at rest.
+        A cube in the gripper is pulled out of it."""
+        a = self._cube_qadr
+        self.data.qpos[a : a + 2] += dist * np.array([np.cos(angle), np.sin(angle)])
+        self.data.qpos[a + 2] = self.cube_half
+        d = self.model.joint("cube_joint").dofadr[0]
+        self.data.qvel[d : d + 6] = 0
+        mujoco.mj_forward(self.model, self.data)
+
     # ---------------------------------------------------------------- gym API
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         super().reset(seed=seed)
@@ -219,10 +239,15 @@ class SO101PickLiftEnv(gym.Env):
 
         self._steps = 0
         self._hold = 0
+        self._perturb_at = -1
+        if self.perturb_prob > 0 and rng.random() < self.perturb_prob:
+            self._perturb_at = int(rng.integers(*PERTURB_STEPS))
         return self._obs(), {}
 
     def step(self, action):
         action = np.clip(np.asarray(action, dtype=np.float64), -1.0, 1.0)
+        if self._steps == self._perturb_at:
+            self.move_cube(self.np_random.uniform(-np.pi, np.pi))
         self._target = np.clip(self._target + action * ACTION_SCALE, self._lo, self._hi)
         self.data.ctrl[:] = self._target
         mujoco.mj_step(self.model, self.data, nstep=self.frame_skip)

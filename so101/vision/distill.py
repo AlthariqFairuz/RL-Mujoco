@@ -14,6 +14,7 @@ and is corrected in the states its own mistakes lead to, so it learns to recover
     # from the repository root
     uv run so101/vision/distill.py --name dagger
     uv run so101/vision/distill.py --name bc --beta-decay 1      # behaviour-cloning baseline
+    uv run so101/vision/distill.py --name dagger_s1 --seed 1      # another training seed
     # evaluate a saved student: success rate over N episodes (same seeds as the SAC evaluation)
     uv run so101/vision/distill.py --eval so101/vision/runs/dagger/student.pt --episodes 200
 
@@ -29,7 +30,6 @@ from pathlib import Path
 
 os.environ.setdefault("MUJOCO_GL", "egl")
 
-import mujoco
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -43,7 +43,7 @@ TEACHER = HERE.parent / "pick_lift" / "runs" / "so101_pick_lift" / "final_model.
 RUNS_DIR = HERE / "runs"
 EVAL_SEED = 10_000  # same evaluation seeds as so101/pick_lift/train.py --eval
 TRAIN_SEED = 200_000  # collection episodes never overlap the evaluation seeds
-PERTURB_STEP, PERTURB_DIST = 40, 0.04  # --perturb: move the cube 4 cm at step 40 (2 s)
+PERTURB_STEP = 40  # --perturb: move the cube 4 cm (env.PERTURB_DIST) at step 40 (2 s)
 
 
 # ---------------------------------------------------------------------- parallel simulators
@@ -59,25 +59,15 @@ def _worker(conn, perturb: bool):
             conn.send(obs)
         elif cmd == "step":
             if perturb and env._steps == PERTURB_STEP:
-                move_cube(env, rng)
+                env.move_cube(rng.uniform(-np.pi, np.pi))
             obs, _, terminated, truncated, info = env.step(arg)
             conn.send((obs, terminated or truncated, info["is_success"]))
+        elif cmd == "perturb_prob":  # random-step perturbations of the env itself (collection)
+            env.perturb_prob = arg
         else:
             env.close()
             conn.close()
             return
-
-
-def move_cube(env: SO101VisionEnv, rng) -> None:
-    """Teleport the cube PERTURB_DIST in a random direction, back onto the table, at rest.
-    A cube in the gripper is pulled out of it, so the policy has to grasp again."""
-    a = env._cube_qadr
-    angle = rng.uniform(-np.pi, np.pi)
-    env.data.qpos[a : a + 2] += PERTURB_DIST * np.array([np.cos(angle), np.sin(angle)])
-    env.data.qpos[a + 2] = env.cube_half
-    d = env.model.joint("cube_joint").dofadr[0]
-    env.data.qvel[d : d + 6] = 0
-    mujoco.mj_forward(env.model, env.data)
 
 
 class Envs:
@@ -101,6 +91,10 @@ class Envs:
         for i in active:
             self.conns[i].send(("step", actions[i]))
         return {i: self.conns[i].recv() for i in active}
+
+    def set_perturb_prob(self, prob: float):
+        for c in self.conns:
+            c.send(("perturb_prob", prob))
 
     def close(self):
         for c in self.conns:
@@ -242,11 +236,17 @@ def main():
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--n-envs", type=int, default=16)
+    p.add_argument("--seed", type=int, default=0,
+                   help="training seed: network init, beta draws and collection episodes")
     p.add_argument("--eval-episodes", type=int, default=50,
                    help="student-only episodes per iteration")
     p.add_argument("--eval", metavar="STUDENT.pt",
                    help="only evaluate this student and exit"
                    " ('teacher' evaluates the SAC teacher)")
+    p.add_argument("--collect-perturb-prob", type=float, default=0.0,
+                   help="fraction of collection episodes in which the cube is moved once, at a "
+                        "random step (pick_lift/env.py); the per-iteration evaluation stays "
+                        "unperturbed")
     p.add_argument("--perturb", action="store_true",
                    help="with --eval: move the cube 4 cm at step 40"
                    " (pulls it out of the gripper)")
@@ -259,7 +259,8 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.set_num_threads(4)
     teacher = SAC.load(args.teacher, device=device)
-    rng = np.random.default_rng(0)
+    torch.manual_seed(args.seed)
+    rng = np.random.default_rng(args.seed)
     envs = Envs(args.n_envs, perturb=args.perturb)
     eval_seeds = [EVAL_SEED + i for i in range(args.episodes)]
 
@@ -282,14 +283,17 @@ def main():
     student = Student().to(device)
     opt = torch.optim.Adam(student.parameters(), lr=args.lr)
     data = Dataset(args.iters * args.episodes_per_iter * 200)
-    log, seed, best = [], TRAIN_SEED, -1.0
+    # each run uses at most iters * (episodes_per_iter + eval_episodes) episode seeds
+    log, seed, best = [], TRAIN_SEED + 100_000 * args.seed, -1.0
     start = time.time()
     for it in range(args.iters):
         beta = args.beta_decay ** it
         seeds = list(range(seed, seed + args.episodes_per_iter))
         seed += args.episodes_per_iter
         student.eval()
+        envs.set_perturb_prob(args.collect_perturb_prob)
         collect_succ = rollout(envs, seeds, student, teacher, beta, device, rng, record=data.add)
+        envs.set_perturb_prob(0.0)
 
         student.train()
         losses = []

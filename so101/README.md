@@ -6,7 +6,10 @@ Reinforcement learning on a simulated SO-101, the 5-DoF + gripper arm used by
 from MuJoCo Menagerie. The pick-and-lift task and SAC setup are ported unchanged from the
 [Koch v1.1 arm](../low_cost_robot_arm/), so this tests whether that recipe carries over to the
 arm people actually build with LeRobot. The SAC policy is then distilled into a camera-based
-policy that sees only what a real SO-101 has: two cameras and its joint readings.
+policy that sees only what a real SO-101 has: two cameras and its joint readings. A controlled
+study of that distillation shows that what limits the student's robustness is the data it is
+trained on, not the teacher: with perturbed data collection the camera-only student recovers
+from a moved cube more often than the state-based teacher it learned from.
 
 <table>
   <tr>
@@ -15,7 +18,7 @@ policy that sees only what a real SO-101 has: two cameras and its joint readings
   </tr>
   <tr>
     <td align="center">SAC from simulator state, 92% success</td>
-    <td align="center">camera-only student, 93% success (top left: its two 84×84 camera images)</td>
+    <td align="center">camera-only student, 90% success (top left: its two 84×84 camera images)</td>
   </tr>
 </table>
 
@@ -26,12 +29,17 @@ policy that sees only what a real SO-101 has: two cameras and its joint readings
 - **Same recipe, new robot:** only the robot-specific parts changed (joint names, jaw geometry,
   gripper direction, workspace). Reward, observation layout, action interface and SAC
   hyperparameters are the Koch ones. Eval success first hit 95% at 525k steps (Koch: 325k).
-- **Camera-only policy at the teacher's level: 93% success.** A CNN student sees two 84×84
-  cameras (wrist and front) plus the joint readings, no cube pose and no contact sensors. It
-  was trained with DAgger to copy the SAC policy, in 2.6 h.
-- **DAgger vs behaviour cloning:** on the nominal task they are close (93% vs 88%). When the
-  cube is moved 4 cm mid-episode, the DAgger student recovers 3.3× as often (43 vs 13 of 200
-  episodes), because it was trained on the states its own mistakes lead to.
+- **Camera-only policy close to the teacher: 90% success** (mean of 3 training seeds; teacher
+  92.5%). A CNN student sees two 84×84 cameras (wrist and front) plus the joint readings, no
+  cube pose and no contact sensors. It was trained with DAgger to copy the SAC policy, in 2.6 h.
+- **DAgger vs behaviour cloning:** on the nominal task they are close (90% vs 87%). When the
+  cube is moved 4 cm mid-episode, the DAgger student recovers about 6× as often (27% vs 5%),
+  and every DAgger seed beats every behaviour-cloning seed, because DAgger was trained on the
+  states its own mistakes lead to.
+- **The student beats its teacher:** collecting the DAgger data with the cube moved in half of
+  the episodes raises recovery from 27% to **49%**, above the teacher's 41.5%, with the same
+  teacher and no loss on the nominal task (92%). All 3 seeds land at 47–50%. Training a more
+  robust teacher with SAC from scratch under the same perturbations failed (11% success).
 - **No real robot needed.** LeRobot's own SO-101 simulation is
   [LeIsaac](https://github.com/LightwheelAI/leisaac) (Isaac Lab, NVIDIA GPU). There is no
   official LeRobot MuJoCo environment for the SO-101, so this one is built on the Menagerie model.
@@ -72,21 +80,71 @@ student policy learns to act from what a real SO-101 provides:
 
 | Policy (200 episodes, seeds 10000+) | Sees | Success | Cube moved 4 cm at 2 s |
 |---|---|---|---|
-| SAC teacher | simulator state | 92% | 42% |
-| **DAgger student** | cameras + joints | **93%** | **22%** |
-| Behaviour-cloning student | cameras + joints | 88% | 6% |
+| SAC teacher | simulator state | 92.5% | 41.5% |
+| **DAgger student** | cameras + joints | **89.6 ± 1.7%** (87.8–91.2) | **26.5 ± 7.1%** (22.3–34.7) |
+| Behaviour-cloning student | cameras + joints | 87.0 ± 0.9% (86.5–88.0) | 4.6 ± 3.6% (0.7–7.8) |
+
+Students: 3 training seeds per method, mean ± standard deviation over seeds (range in
+brackets). The final student of each seed is evaluated 3 times on the same 200 episodes and
+averaged, because student evaluations are not bit-for-bit repeatable: GPU convolutions give
+tiny numerical differences that the contact-rich task amplifies (one seed-0 DAgger student
+scored 34, 45 and 46 of 200 on the same perturbed episodes). The teacher (MLP) evaluates
+identically every time.
 
 <p align="center"><img src="videos/vision_distill.png" width="85%"></p>
 
-- Both students reach the teacher's level on the nominal task, DAgger after ~180k samples and
-  behaviour cloning after ~240k.
+- Both students come within a few points of the teacher on the nominal task. DAgger is ahead
+  for most of training, but the seed bands overlap: on the nominal task alone the two methods
+  are hard to tell apart.
 - The difference shows off the expert's path. In the perturbation test the cube is teleported
   4 cm in a random direction at step 40, out of the gripper if it was held. The behaviour-cloning
   student has only seen the teacher's clean episodes and almost never re-grasps. The DAgger
-  student was corrected in its own off-track states and recovers 3.3× as often.
-- No student can beat its teacher here: the SAC teacher never saw a moved cube in training
-  either and recovers only 42% of the time. A teacher trained with perturbations is the next
-  lever.
+  student was corrected in its own off-track states and recovers about 6× as often. The spread
+  between DAgger seeds (22–35%) is large, so 3 seeds pin down the gap, not its exact size.
+- Neither student beats the teacher here: the SAC teacher recovers 41.5% of the time. The
+  next section asks whether that ceiling comes from the teacher or from the data.
+
+### What limits the student's robustness: the teacher or the data?
+
+After the experiment above the DAgger student recovers from a moved cube in 26.5% of episodes
+and its teacher in 41.5%. Two explanations fit: the student copies a teacher that is itself
+poor at recovering, or the student rarely sees a moved cube during training and never learns
+what to do there. Two experiments separate them.
+
+**A more robust teacher.** SAC trained from scratch with the cube moved (4 cm, random
+direction, at a random step between 1 and 6 s) in 50% of the training episodes, otherwise the
+same recipe and seed as the original teacher. It did not learn the task: 11% nominal success,
+0.5% under perturbation. The training curves show why: the entropy coefficient rose to 1.8
+(original run: ~0.1), the critic loss was 100–300× larger, and evaluation success peaked at
+10% around 225k steps and then collapsed. Observations and rewards stay in their normal range
+under perturbation, so this is an optimisation failure of SAC from scratch on the noisier
+task, not an environment bug. Fine-tuning the original teacher with perturbations
+(`train.py --init`) is the obvious fix, but it was not carried out.
+
+**More recovery data, same teacher.** DAgger exactly as above with the original teacher, but
+during data collection the cube is moved in 50% of the episodes (`distill.py
+--collect-perturb-prob 0.5`). The teacher labels the states after the move like any other
+state. Evaluation is the same as above (3 seeds, 3 evaluations each).
+
+| Policy (200 episodes, seeds 10000+) | Success | Cube moved 4 cm at 2 s |
+|---|---|---|
+| SAC teacher | 92.5% | 41.5% |
+| SAC teacher trained from scratch with perturbations | 11% | 0.5% |
+| DAgger student | 89.6 ± 1.7% | 26.5 ± 7.1% |
+| **DAgger student, perturbed data collection** | **91.7 ± 1.5%** (90.3–93.3) | **49.0 ± 1.6%** (47.2–50.3) |
+
+- **The data is the limit, not the teacher.** With the same teacher, perturbed collection
+  almost doubles recovery (26.5% → 49.0%) and costs nothing on the nominal task. The spread
+  between seeds also shrinks from ±7.1 to ±1.6 points.
+- **The student surpasses its teacher.** All three seeds recover more often than the teacher
+  (47–50% vs 41.5%). A plausible reason: the teacher's action is reasonable in each single
+  state after the move, but when the teacher drives itself it rarely ends up in those states
+  and its errors compound. The student is trained on many such states, each labelled by the
+  teacher, and so learns the recovery better than the teacher executes it.
+- **Caveat:** the test perturbation (4 cm at step 40) lies inside the training distribution of
+  the perturbed collection (4 cm at a random step from 20 to 120). This shows recovery from a
+  kind of disturbance the student has seen, not generalisation to new ones; larger moves or
+  repeated moves would test that.
 
 ## Task
 
@@ -151,9 +209,19 @@ uv run so101/play.py so101/pick_lift/runs/so101_pick_lift/final_model.zip --epis
 # live training curves
 uv run tensorboard --logdir so101/pick_lift/runs
 
+# teacher with the cube moved mid-episode in half of the training episodes (did not learn;
+# see "What limits the student's robustness"); --init MODEL.zip fine-tunes a saved model instead
+uv run so101/pick_lift/train.py --name so101_pick_lift_perturb --timesteps 800000 --n-envs 16 \
+    --perturb-prob 0.5
+
 # camera-based student: DAgger (~2.6 h with 8 simulators) and the behaviour-cloning baseline
 uv run so101/vision/distill.py --name dagger
 uv run so101/vision/distill.py --name bc --beta-decay 1
+# more training seeds (the plot and table use seeds 0, 1, 2)
+uv run so101/vision/distill.py --name dagger_s1 --seed 1
+uv run so101/vision/distill.py --name bc_s1 --seed 1 --beta-decay 1
+# DAgger with the cube moved in half of the collection episodes (seeds 0, 1, 2)
+uv run so101/vision/distill.py --name dagger_pc --collect-perturb-prob 0.5
 # evaluate (nominal, then with the cube moved mid-episode); "teacher" evaluates the SAC policy
 uv run so101/vision/distill.py --eval so101/vision/runs/dagger/student.pt
 uv run so101/vision/distill.py --eval so101/vision/runs/dagger/student.pt --perturb
@@ -174,7 +242,8 @@ one fixed scene. Still missing before a real SO-101:
   not depend on how the simulator draws the scene
 - physics randomization (friction, mass, servo gains, latency), as done for the
   [Go2](../unitree_go2/#robustness)
-- a teacher trained with perturbations, so there is a recovery behaviour to distil
+- recovery tests outside the training perturbations (larger moves, repeated moves, pushes
+  instead of teleports)
 - LeRobot calibration so the simulated joint angles match the real servo readings
 
 ## Acknowledgements
